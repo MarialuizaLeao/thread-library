@@ -199,13 +199,13 @@ void dccthread_wakeup_handler(int sig, siginfo_t *si, void *uc) {
     sigprocmask(SIG_BLOCK, &mask, NULL);
     for(int i = 0; i < readyThreadList->count; i++){
         dccthread_t* thread = dlist_get_index(readyThreadList, i);
-        if(thread->context == uc){
+        if(thread == si->si_value.sival_ptr){
             thread->isSleeping = false;
-            //dlist_push_right(readyThreadList, thread);
+            dlist_push_right(readyThreadList, thread);
             break;
         }
     }
-    sigprocmask(SIG_UNBLOCK, &mask, NULL);
+    //sigprocmask(SIG_UNBLOCK, &mask, NULL);
 }
 
 
@@ -221,22 +221,23 @@ void dccthread_sleep(struct timespec ts){
 	struct sigaction sleepAction;
 	struct itimerspec sleepSpec;
 
-    sleepAction.sa_flags = SA_SIGINFO;
-	sleepAction.sa_sigaction = dccthread_wakeup_handler;
-	sigaction(SIGRTMIN+1, &sleepAction, NULL);
-
     sleepEvent.sigev_notify = SIGEV_SIGNAL;
-	sleepEvent.sigev_signo = SIGRTMIN+1;
-    //sleepEvent.sigev_notify_attributes = NULL;
-    //sleepEvent.sigev_value.sival_ptr = currentThread;
-
-    sleepSpec.it_value = ts;
-
+    sleepEvent.sigev_signo = SIGRTMIN;
+    sleepEvent.sigev_value.sival_ptr = currentThread;
     timer_create(CLOCK_REALTIME, &sleepEvent, &sleepTimer);
-	timer_settime(sleepTimer, 0, &sleepSpec, NULL);
+    sleepSpec.it_value = ts;
+    sleepSpec.it_interval.tv_sec = 0;
+    sleepSpec.it_interval.tv_nsec = 10000000;
+    timer_settime(sleepTimer, 0, &sleepSpec, NULL);
 
-	//sleepSpec.it_interval.tv_sec = 0;
-	//sleepSpec.it_interval.tv_nsec = 10000000;	
+    sleepAction.sa_mask = mask;
+    sleepAction.sa_flags = SA_SIGINFO;
+    sleepAction.sa_sigaction  = dccthread_wakeup_handler;
+    sleepEvent.sigev_notify_attributes = NULL;
+
+    sigaction(SIGRTMIN, &sleepAction, NULL);
+
+    dlist_push_right(readyThreadList, currentThread);	
 
 	swapcontext(currentThread->context, &manager);
 
