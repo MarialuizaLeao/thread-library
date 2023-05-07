@@ -1,0 +1,8 @@
+dccthread.c: In function ‘dccthread_wakeup_handler’:
+dccthread.c:205:19: warning: unused variable ‘thread’ [-Wunused-variable]
+  205 |     dccthread_t * thread = si->si_value.sival_ptr;
+      |                   ^~~~~~
+dccthread.c: In function ‘dccthread_sleep’:
+dccthread.c:228:19: warning: assignment to ‘__sighandler_t’ {aka ‘void (*)(int)’} from incompatible pointer type ‘void (*)(int,  siginfo_t *, void *)’ {aka ‘void (*)(int,  struct <anonymous> *, void *)’} [-Wincompatible-pointer-types]
+  228 |     sa.sa_handler = dccthread_wakeup_handler;
+      |                   ^

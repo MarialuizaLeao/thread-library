@@ -13,8 +13,6 @@
 #define TIMER_INTERVAL_SEC 0
 #define TIMER_INTERVAL_NSEC 10000000
 
-sigset_t mask;
-
 //Thread structure
 typedef struct dccthread{
     char name[DCCTHREAD_MAX_NAME_SIZE]; //Threads's name
@@ -25,12 +23,15 @@ typedef struct dccthread{
 
 } dccthread_t;
 
+sigset_t mask;
 ucontext_t manager;
 struct dlist *readyThreadList;
+//struct dlist *sleepingThreadList;
 
 //Function to initialize the thread library and creat a new thread to excecute the function func with the parameter param
 void dccthread_init(void (*func)(int), int param){
     readyThreadList = dlist_create();
+    //sleepingThreadList = dlist_create();
     // 1 -- Initialize a meneger thread that will scalonate the new threads 
     // 2 -- Inicialize a main thread that will execute func THE NAME HAS TO BE MAIN
     dccthread_create("main", func, param);
@@ -38,36 +39,36 @@ void dccthread_init(void (*func)(int), int param){
 
     // set timer
     timer_t timer_id;
-  struct sigevent se;
-  struct sigaction sa;
-  struct itimerspec ts;
+    struct sigevent se;
+    struct sigaction sa;
+    struct itimerspec ts;
 
-  se.sigev_signo = SIGRTMIN;
-  se.sigev_notify = SIGEV_SIGNAL;
-  se.sigev_notify_attributes = NULL;
-  se.sigev_value.sival_ptr = &timer_id;
-  sa.sa_flags = 0;
-  sa.sa_handler = (void *)dccthread_yield;
+    se.sigev_signo = SIGRTMIN;
+    se.sigev_notify = SIGEV_SIGNAL;
+    se.sigev_notify_attributes = NULL;
+    se.sigev_value.sival_ptr = &timer_id;
+    sa.sa_flags = 0;
+    sa.sa_handler = (void *)dccthread_yield;
 
-  ts.it_interval.tv_sec = TIMER_INTERVAL_SEC;
-  ts.it_interval.tv_nsec = TIMER_INTERVAL_NSEC;
-  ts.it_value.tv_sec = TIMER_INTERVAL_SEC;
-  ts.it_value.tv_nsec = TIMER_INTERVAL_NSEC;
+    ts.it_interval.tv_sec = TIMER_INTERVAL_SEC;
+    ts.it_interval.tv_nsec = TIMER_INTERVAL_NSEC;
+    ts.it_value.tv_sec = TIMER_INTERVAL_SEC;
+    ts.it_value.tv_nsec = TIMER_INTERVAL_NSEC;
 
-  sigaction(SIGRTMIN, &sa, NULL);
-  timer_create(CLOCK_PROCESS_CPUTIME_ID, &se, &timer_id);
-  timer_settime(timer_id, 0, &ts, NULL);
+    sigaction(SIGRTMIN, &sa, NULL);
+    timer_create(CLOCK_PROCESS_CPUTIME_ID, &se, &timer_id);
+    timer_settime(timer_id, 0, &ts, NULL);
 
-  sigemptyset(&mask);
-  sigaddset(&mask, SIGRTMIN);
+    sigemptyset(&mask);
+    sigaddset(&mask, SIGRTMIN);
 
-  sigprocmask(SIG_BLOCK, &mask, NULL);
+    sigprocmask(SIG_BLOCK, &mask, NULL);
     // 3 -- Execute the main thread
     while(!dlist_empty(readyThreadList))
     {
         dccthread_t *nextThread = (dccthread_t*) dlist_get_index(readyThreadList, 0); // get the next in line thread
 
-        if(nextThread->isWaiting || nextThread->isSleeping)
+        if(nextThread->isWaiting)
         {
             dlist_pop_left(readyThreadList);
             dlist_push_right(readyThreadList, nextThread);
@@ -76,7 +77,7 @@ void dccthread_init(void (*func)(int), int param){
         swapcontext(&manager, nextThread->context);
         dlist_pop_left(readyThreadList);
 
-        if(nextThread->isWaiting || nextThread->isSleeping){
+        if(nextThread->isWaiting){
             dlist_push_right(readyThreadList, nextThread);
         }
     }
@@ -160,7 +161,7 @@ void dccthread_exit(void){
         }
     }
     
-    free(currentThread->context->uc_stack.ss_sp);
+    free(currentThread);
 
     sigprocmask(SIG_UNBLOCK, &mask, NULL);
 
@@ -180,6 +181,7 @@ void dccthread_wait(dccthread_t *tid){
         if(thread == tid)
         {
             found = true;
+            break;
         }
     }
 
@@ -196,16 +198,9 @@ void dccthread_wait(dccthread_t *tid){
 }
 
 void dccthread_wakeup_handler(int sig, siginfo_t *si, void *uc) {
-    sigprocmask(SIG_BLOCK, &mask, NULL);
-    for(int i = 0; i < readyThreadList->count; i++){
-        dccthread_t* thread = dlist_get_index(readyThreadList, i);
-        if(thread == si->si_value.sival_ptr){
-            thread->isSleeping = false;
-            dlist_push_right(readyThreadList, thread);
-            break;
-        }
-    }
-    //sigprocmask(SIG_UNBLOCK, &mask, NULL);
+    dccthread_t * thread = si->si_value.sival_ptr;
+    dlist_pop_left(readyThreadList);
+	dlist_push_right(readyThreadList, (dccthread_t *)si->si_value.sival_ptr);
 }
 
 
@@ -216,26 +211,26 @@ void dccthread_sleep(struct timespec ts){
     currentThread->isSleeping = true;
 
 	// Set a new timer to sleep the current thread.
-	timer_t sleepTimer;
-	struct sigevent sleepEvent;
-	struct sigaction sleepAction;
-	struct itimerspec sleepSpec;
+	timer_t timer_sleep;
+    struct sigevent se;
+    struct sigaction sa;
+    struct itimerspec tsSleep;
 
-    sleepEvent.sigev_notify = SIGEV_SIGNAL;
-    sleepEvent.sigev_signo = SIGRTMIN;
-    sleepEvent.sigev_value.sival_ptr = currentThread;
-    timer_create(CLOCK_REALTIME, &sleepEvent, &sleepTimer);
-    sleepSpec.it_value = ts;
-    sleepSpec.it_interval.tv_sec = 0;
-    sleepSpec.it_interval.tv_nsec = 10000000;
-    timer_settime(sleepTimer, 0, &sleepSpec, NULL);
+    se.sigev_signo = SIGRTMIN;
+    se.sigev_notify = SIGEV_SIGNAL;
+    se.sigev_notify_attributes = NULL;
+    se.sigev_value.sival_ptr = &currentThread;
+    sa.sa_flags = 0;
+    sa.sa_handler = dccthread_wakeup_handler;
 
-    sleepAction.sa_mask = mask;
-    sleepAction.sa_flags = SA_SIGINFO;
-    sleepAction.sa_sigaction  = dccthread_wakeup_handler;
-    sleepEvent.sigev_notify_attributes = NULL;
+    tsSleep.it_interval.tv_sec = TIMER_INTERVAL_SEC;
+    tsSleep.it_interval.tv_nsec = TIMER_INTERVAL_NSEC;
+    tsSleep.it_value.tv_sec = TIMER_INTERVAL_SEC;
+    tsSleep.it_value.tv_nsec = TIMER_INTERVAL_NSEC;
 
-    sigaction(SIGRTMIN, &sleepAction, NULL);
+    sigaction(SIGRTMIN, &sa, NULL);
+    timer_create(CLOCK_PROCESS_CPUTIME_ID, &se, &timer_sleep);
+    timer_settime(timer_sleep, 0, &tsSleep, NULL);
 
     dlist_push_right(readyThreadList, currentThread);	
 
