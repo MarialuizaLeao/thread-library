@@ -29,8 +29,8 @@ typedef struct bin_sem{
 } bin_sem_t;
 
 // Global variables
-sigset_t mask;
-sigset_t sleepmask;
+sigset_t  preemptionMask;
+sigset_t sleepMask;
 ucontext_t manager;
 struct dlist *readyThreadList;
 bin_sem_t *binSem;
@@ -51,43 +51,46 @@ void dccthread_init(void (*func)(int), int param){
     dccthread_create("main", func, param);
     getcontext(&manager);
 
-    // Set timer and signal
-    timer_t timer_id;
-    struct sigevent se;
-    struct sigaction sa;
-    struct itimerspec ts;
+    // Set the timer
+    timer_t preemptionTimer;
+    struct sigevent preemptionEvent;
+    struct sigaction preemptionAction;
+    struct itimerspec preemptionSpec;
 
-    sa.sa_flags = 0;
-    se.sigev_signo = SIGRTMIN;
-    se.sigev_notify = SIGEV_SIGNAL;
-    se.sigev_notify_attributes = NULL;
-    se.sigev_value.sival_ptr = &timer_id;
+    preemptionAction.sa_flags = 0;
+    preemptionAction.sa_sigaction = (void *)dccthread_yield;
+    sigaction(SIGRTMIN, &preemptionAction, NULL);
+
+    preemptionEvent.sigev_notify = SIGEV_SIGNAL;
+    preemptionEvent.sigev_signo = SIGRTMIN;
+    preemptionEvent.sigev_value.sival_ptr = &preemptionTimer;
+    timer_create(CLOCK_PROCESS_CPUTIME_ID, &preemptionEvent, &preemptionTimer);
     
-    sa.sa_sigaction = (void *)dccthread_yield;
+    preemptionSpec.it_interval.tv_sec = TIMER_INTERVAL_SEC;
+    preemptionSpec.it_interval.tv_nsec = TIMER_INTERVAL_NSEC;
+    preemptionSpec.it_value.tv_sec = TIMER_INTERVAL_SEC;
+    preemptionSpec.it_value.tv_nsec = TIMER_INTERVAL_NSEC;
+    timer_settime(preemptionTimer, 0, &preemptionSpec, NULL);
+    
+    // Set the signal
+    sigemptyset(&preemptionMask);
+    sigaddset(&preemptionMask, SIGRTMIN);
 
-    ts.it_interval.tv_sec = TIMER_INTERVAL_SEC;
-    ts.it_interval.tv_nsec = TIMER_INTERVAL_NSEC;
-    ts.it_value.tv_sec = TIMER_INTERVAL_SEC;
-    ts.it_value.tv_nsec = TIMER_INTERVAL_NSEC;
+    // Set the sleeping signal
+    sigemptyset(&sleepMask);
+    sigaddset(&sleepMask, SIGRTMAX);
 
-    sigaction(SIGRTMIN, &sa, NULL);
-    sigemptyset(&mask);
-    sigaddset(&mask, SIGRTMIN);
-    sigemptyset(&sleepmask);
-    sigaddset(&sleepmask, SIGRTMAX);
-    sigprocmask(SIG_BLOCK, &mask, NULL);
-    timer_create(CLOCK_PROCESS_CPUTIME_ID, &se, &timer_id);
-    timer_settime(timer_id, 0, &ts, NULL);
-
+    // Block the signal
+    sigprocmask(SIG_BLOCK, &preemptionMask, NULL);
     
     // Run the threads
     while(!dlist_empty(readyThreadList) || !dlist_empty(binSem->sleepingThreadList)){
 
         // Unblock the sleeping signal
-        sigprocmask(SIG_UNBLOCK, &sleepmask, NULL);
+        sigprocmask(SIG_UNBLOCK, &sleepMask, NULL);
 
         // Block the sleeping signal
-        sigprocmask(SIG_BLOCK, &sleepmask, NULL);
+        sigprocmask(SIG_BLOCK, &sleepMask, NULL);
 
         // Get the next thread to be executed
         dccthread_t *nextThread = (dccthread_t*) dlist_get_index(readyThreadList, 0);
@@ -112,7 +115,7 @@ void dccthread_init(void (*func)(int), int param){
     }
 
     // Destroy the timer
-    timer_delete(timer_id);
+    timer_delete(preemptionTimer);
 
     // Destroy the ready list
     dlist_destroy(readyThreadList, NULL);
@@ -134,7 +137,7 @@ dccthread_t * dccthread_create(const char *name, void (*func)(int), int param){
     getcontext(newContext);
 
     // Block the signal
-    sigprocmask(SIG_BLOCK, &mask, NULL);
+    sigprocmask(SIG_BLOCK, &preemptionMask, NULL);
 
     // Inicialize the thread's attributes
     strcpy(newThread->name, name);
@@ -157,7 +160,7 @@ dccthread_t * dccthread_create(const char *name, void (*func)(int), int param){
     makecontext(newThread->context, (void(*)(void))func, 1, param);
 
     // Unblock the signal
-    sigprocmask(SIG_UNBLOCK, &mask, NULL);
+    sigprocmask(SIG_UNBLOCK, &preemptionMask, NULL);
 
     return newThread;
 }
@@ -165,7 +168,7 @@ dccthread_t * dccthread_create(const char *name, void (*func)(int), int param){
 void dccthread_yield(void){
 
     // Block the signal
-    sigprocmask(SIG_BLOCK, &mask, NULL);
+    sigprocmask(SIG_BLOCK, &preemptionMask, NULL);
 
     // Return to the end of the list
     dccthread_t *currentThread = dccthread_self();
@@ -175,7 +178,7 @@ void dccthread_yield(void){
     swapcontext(currentThread->context, &manager);
 
     // Unblock the signal
-    sigprocmask(SIG_UNBLOCK, &mask, NULL);
+    sigprocmask(SIG_UNBLOCK, &preemptionMask, NULL);
 
 }
 
@@ -194,7 +197,7 @@ const char *dccthread_name(dccthread_t *tid){
 void dccthread_exit(void){
 
     // Block the signal
-    sigprocmask(SIG_BLOCK, &mask, NULL);
+    sigprocmask(SIG_BLOCK, &preemptionMask, NULL);
 
     dccthread_t *currentThread = dccthread_self();
 
@@ -223,7 +226,7 @@ void dccthread_exit(void){
     setcontext(&manager);
 
     // Unblock the signal
-    sigprocmask(SIG_UNBLOCK, &mask, NULL);
+    sigprocmask(SIG_UNBLOCK, &preemptionMask, NULL);
 
 }
 
@@ -231,7 +234,7 @@ void dccthread_exit(void){
 void dccthread_wait(dccthread_t *tid){
 
     // Block the signal
-    sigprocmask(SIG_BLOCK, &mask, NULL);
+    sigprocmask(SIG_BLOCK, &preemptionMask, NULL);
 
     bool found = false;
 
@@ -270,7 +273,7 @@ void dccthread_wait(dccthread_t *tid){
     }
 
     // Unblock the signal
-    sigprocmask(SIG_UNBLOCK, &mask, NULL);
+    sigprocmask(SIG_UNBLOCK, &preemptionMask, NULL);
 }
 
 int testAndSet(int *lock){
@@ -320,7 +323,7 @@ void binSignal(int sig, siginfo_t *si, void *uc){
 void dccthread_sleep(struct timespec ts){
 
     // Block the signal
-    sigprocmask(SIG_BLOCK, &mask, NULL);
+    sigprocmask(SIG_BLOCK, &preemptionMask, NULL);
 
     dccthread_t *currentThread = dccthread_self();
 
@@ -328,29 +331,29 @@ void dccthread_sleep(struct timespec ts){
     binWait(currentThread);
 
     // Set the timer
-    timer_t timerp;
-    struct sigaction s1;
-    struct sigevent sev;
-    struct itimerspec its;
+    timer_t sleepTimer;
+    struct sigaction sleepAction;
+    struct sigevent sleepEvent;
+    struct itimerspec sleepSpec;
 
-    s1.sa_flags = SA_SIGINFO;
-    s1.sa_sigaction = binSignal;
-    s1.sa_mask = mask;
-    sigaction(SIGRTMAX, &s1, NULL);
+    sleepAction.sa_flags = SA_SIGINFO;
+    sleepAction.sa_sigaction = binSignal;
+    sigaction(SIGRTMAX, &sleepAction, NULL);
 
-    sev.sigev_notify = SIGEV_SIGNAL;
-    sev.sigev_signo = SIGRTMAX;
-    sev.sigev_value.sival_ptr = currentThread;
-    timer_create(CLOCK_REALTIME, &sev, &timerp);
+    sleepEvent.sigev_notify = SIGEV_SIGNAL;
+    sleepEvent.sigev_signo = SIGRTMAX;
+    sleepEvent.sigev_value.sival_ptr = currentThread;
+    timer_create(CLOCK_REALTIME, &sleepEvent, &sleepTimer);
 
-    its.it_value = ts;
-    its.it_interval.tv_sec = 0;
-    its.it_interval.tv_nsec = 0;
-    timer_settime(timerp, 0, &its, NULL);
+    sleepSpec.it_interval.tv_sec = 0;
+    sleepSpec.it_interval.tv_nsec = 0;
+    sleepSpec.it_value.tv_sec = ts.tv_sec;
+    sleepSpec.it_value.tv_nsec = ts.tv_nsec;
+    timer_settime(sleepTimer, 0, &sleepSpec, NULL);
 
     // Call the maneger thread to choose the next thread
     swapcontext(currentThread->context, &manager);
 
     // Unblock the signal
-    sigprocmask(SIG_UNBLOCK, &mask, NULL);
+    sigprocmask(SIG_UNBLOCK, &preemptionMask, NULL);
 }
