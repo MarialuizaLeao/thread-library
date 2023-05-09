@@ -23,15 +23,24 @@ typedef struct dccthread{
 
 } dccthread_t;
 
+typedef struct bin_sem{
+    int flag;
+    int guard;
+    struct dlist *sleepingThreadList;
+} bin_sem_t;
+
 sigset_t mask;
 ucontext_t manager;
 struct dlist *readyThreadList;
-struct dlist *sleepingThreadList;
+bin_sem_t *binSem;
 
 //Function to initialize the thread library and creat a new thread to excecute the function func with the parameter param
 void dccthread_init(void (*func)(int), int param){
-    readyThreadList = dlist_create();
-    sleepingThreadList = dlist_create();
+readyThreadList = dlist_create();
+binSem =  malloc(sizeof(bin_sem_t));
+binSem->sleepingThreadList = dlist_create();
+binSem->flag = 0;
+binSem->guard = 0;
     // 1 -- Initialize a meneger thread that will scalonate the new threads 
     // 2 -- Inicialize a main thread that will execute func THE NAME HAS TO BE MAIN
     dccthread_create("main", func, param);
@@ -201,53 +210,65 @@ int cmp(const void *e1, const void *e2, void *userdata){
 	return (dccthread_t *)e1 != (dccthread_t *)e2;
 }
 
-void dccthread_wakeup_handler(int sig, siginfo_t *si, void *uc) {
-    //dccthread_t * thread = si->si_value.sival_ptr;
-    //bool found = false;
-    //int index;
-    /*for(int i = 0; i < sleepingThreadList && !found; i++)
-    {
-        if(dlist_get_index(sleepingThreadList, i) == thread)
-        {
-            found = true;
-            index = i;
-            break;
-        }
-    }*/
-    dlist_find_remove(sleepingThreadList, (dccthread_t *)si->si_value.sival_ptr, cmp, NULL);
-	dlist_push_right(readyThreadList, (dccthread_t *)si->si_value.sival_ptr);
+int testAndSet(int *lock){
+    int oldValue = *lock;
+    *lock = 1;
+    return oldValue;
 }
 
+void binWait(dccthread_t *thread){
+    while(testAndSet(&binSem->guard) == 1);
+    if(binSem->flag == 0){
+        binSem->flag = 1;
+        binSem->guard = 0;
+    }
+    else{
+        binSem->guard = 1;
+        thread->isSleeping = true;
+        dlist_push_right(binSem->sleepingThreadList, thread);
+        binSem->guard = 0;
+    }
+}
+
+void binSignal(int sig, siginfo_t *si, void *uc){
+    while(testAndSet(&binSem->guard) == 1);
+    dccthread_t *thread;
+    if(dlist_empty(binSem->sleepingThreadList)){
+        binSem->flag = 0;
+    }
+    else{
+        thread = dlist_get_index(binSem->sleepingThreadList, 0);
+        dlist_push_right(readyThreadList, thread);
+    }
+    binSem->guard = 0;
+}
 
 void dccthread_sleep(struct timespec ts){
     sigprocmask(SIG_BLOCK, &mask, NULL);
 
-    dccthread_t * current_thread = dlist_get_index(readyThreadList, 0);
-    current_thread->isSleeping = true;
+    dccthread_t *currentThread = dccthread_self();
+    binWait(currentThread);
 
-    timer_t st;
-    struct sigevent sse;
-    struct sigaction ssa;
-    struct itimerspec sts;
+    timer_t sleepTimer;
+    struct sigevent sleepEvent;
+    struct sigaction sleepAction;
+    struct itimerspec sleepSpec;
 
-    ssa.sa_flags = SA_SIGINFO;
-    ssa.sa_sigaction = dccthread_wakeup_handler;
-    ssa.sa_mask = mask;
-    sigaction(SIGRTMAX, &ssa, NULL);
+    sleepAction.sa_flags = SA_SIGINFO;
+    sleepAction.sa_sigaction = binSignal;
+    sleepAction.sa_mask = mask;
+    sigaction(SIGRTMAX, &sleepAction, NULL);
 
-    sse.sigev_notify = SIGEV_SIGNAL;
-    sse.sigev_signo = SIGRTMAX;
-    sse.sigev_value.sival_ptr = current_thread;
-    timer_create(CLOCK_REALTIME, &sse, &st);
+    sleepEvent.sigev_notify = SIGEV_SIGNAL;
+    sleepEvent.sigev_signo = SIGRTMAX;
+    sleepEvent.sigev_value.sival_ptr = currentThread;
+    timer_create(CLOCK_REALTIME, &sleepEvent, &sleepTimer);
 
-    sts.it_value = ts;
-    sts.it_interval.tv_sec = ts.tv_sec;
-    sts.it_interval.tv_nsec = ts.tv_nsec;
-    timer_settime(st, 0, &sts, NULL);
+    sleepSpec.it_value = ts;
+    sleepSpec.it_interval.tv_sec = ts.tv_sec;
+    sleepSpec.it_interval.tv_nsec = ts.tv_nsec;
+    timer_settime(sleepTimer, 0, &sleepSpec, NULL);
 
-    dlist_push_right(sleepingThreadList, current_thread);
-    dlist_push_right(readyThreadList, current_thread);
-
-    swapcontext(current_thread->context, &manager);
+    swapcontext(currentThread->context, &manager);
     sigprocmask(SIG_UNBLOCK, &mask, NULL);
 }
