@@ -42,9 +42,9 @@ context: ponteiro para o contexto da thread.
 isWaiting: booleano que indica se a thread está esperando (true) ou não (false).
 waitingFor: ponteiro para a thread pela qual a thread atual está esperando.
 bin_sem_t: estrutura de dados que representa um semáforo binário. Possui os seguintes campos:
-flag: valor do semáforo, que pode ser 0 (semáforo vermelho) ou 1 (semáforo verde).
-guard: variável de guarda, utilizada para evitar race conditions no acesso ao semáforo.
-sleepingThreadList: lista encadeada que contém as threads que estão esperando pelo semáforo.
+  flag: valor do semáforo, que pode ser 0 (semáforo vermelho) ou 1 (semáforo verde).
+  guard: variável de guarda, utilizada para evitar race conditions no acesso ao semáforo.
+  sleepingThreadList: lista encadeada que contém as threads que estão esperando pelo semáforo.
 Além disso, a biblioteca também utiliza a seguinte estrutura de dados:
 
 dlist: lista encadeada duplamente ligada que contém as threads prontas para serem executadas.
@@ -56,7 +56,7 @@ dlist: é uma estrutura de dados que permite adicionar e remover elementos em te
 
   2. Descreva o mecanismo utilizado para sincronizar chamadas de
      dccthread_yield e disparos do temporizador (parte 4).
-     
+
 O mecanismo utilizado para sincronizar chamadas de dccthread_yield e disparos do temporizador pode variar dependendo da implementação específica do sistema ou biblioteca que está sendo usada. No entanto, em geral, a sincronização pode ser realizada usando semáforos, mutexes ou outros mecanismos de exclusão mútua para garantir que apenas um thread possa executar de cada vez.
 
 Por exemplo, quando um temporizador é disparado, ele pode sinalizar um semáforo que está sendo esperado pelo thread que está atualmente em execução. Quando o thread recebe o sinal, ele pode então liberar o semáforo e entrar em uma seção crítica protegida por um mutex. Dentro dessa seção crítica, ele pode executar uma verificação para determinar se ele deve chamar dccthread_yield e, se assim for, chamar a função.
