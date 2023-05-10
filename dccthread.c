@@ -23,8 +23,7 @@ typedef struct dccthread{
 
 // Semaphore structure
 typedef struct bin_sem{
-    int flag;
-    int guard;
+    int lock;
     struct dlist *sleepingThreadList;
 } bin_sem_t;
 
@@ -44,8 +43,7 @@ void dccthread_init(void (*func)(int), int param){
     // Initialize the sleeping semaphore
     binSem =  malloc(sizeof(bin_sem_t));
     binSem->sleepingThreadList = dlist_create();
-    binSem->flag = 0;
-    binSem->guard = 0;
+    binSem->lock = 0;
 
     // Create the main thread
     dccthread_create("main", func, param);
@@ -276,48 +274,20 @@ void dccthread_wait(dccthread_t *tid){
     sigprocmask(SIG_UNBLOCK, &preemptionMask, NULL);
 }
 
-int testAndSet(int *lock){
-    int oldValue = *lock;
-    *lock = 1;
-    return oldValue;
-}
-
 void binWait(dccthread_t *thread){
-    //while(testAndSet(&binSem->guard) == 1);
-    //if(binSem->flag == 0){
-    //    binSem->flag = 1;
-    //    binSem->guard = 0; // Libera o loop
-    //}
-    //else{
-    //    dlist_push_right(binSem->sleepingThreadList, thread);
-    //    binSem->guard = 0; // Libera o loop
-    //}
-    binSem->flag--;
-    if(binSem->flag < 0){
+    binSem->lock--;
+    if(binSem->lock < 0){
         dlist_push_right(binSem->sleepingThreadList, thread);
     }
 }
 
 void binSignal(int sig, siginfo_t *si, void *uc){
-    //while(testAndSet(&binSem->guard) == 1);
-    //dccthread_t *thread;
-    //if(dlist_empty(binSem->sleepingThreadList)){
-    //    binSem->flag = 0; // Ninguem está esperando
-    //}
-    //else{
-    //    thread = (dccthread_t *)si->si_value.sival_ptr;
-    //    dlist_pop_left(binSem->sleepingThreadList);
-    //    dlist_push_right(readyThreadList, thread);
-    //}
-    //binSem->guard = 0; // Libera o loop
     dccthread_t* sleepingThread = (dccthread_t *)si->si_value.sival_ptr;
-    binSem->flag++;
-    if(binSem->flag <= 0){
+    binSem->lock++;
+    if(binSem->lock <= 0){
         dlist_pop_left(binSem->sleepingThreadList);
         dlist_push_right(readyThreadList, sleepingThread);
     }
-    //dlist_pop_left(binSem->sleepingThreadList);
-    //dlist_push_right(readyThreadList, sleeping1);
 }
 
 void dccthread_sleep(struct timespec ts){
